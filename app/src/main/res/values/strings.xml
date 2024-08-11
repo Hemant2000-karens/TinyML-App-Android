@@ -3,4 +3,5 @@
     <string name="no_result_yet">No result yet</string>
     <string name="camera_permission_is_required">Camera permission is required.</string>
     <string name="hello">hello</string>
+    <string name="model_loaded_successfully">Model loaded successfully!</string>
 </resources>

@@ -1,12 +1,13 @@
 package com.iiitdmj.tinyml;
 
+import static androidx.camera.core.resolutionselector.AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY;
+
+import android.os.Bundle;
 import android.Manifest;
 import android.content.pm.PackageManager;
-import android.content.res.AssetManager;
 import android.graphics.Bitmap;
-import android.os.Bundle;
+import android.graphics.Color;
 import android.widget.TextView;
-
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
@@ -15,27 +16,26 @@ import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
+import androidx.camera.core.resolutionselector.ResolutionSelector;
+import androidx.camera.core.resolutionselector.ResolutionStrategy;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.content.ContextCompat;
-
 import com.google.common.util.concurrent.ListenableFuture;
-
 import org.tensorflow.lite.Interpreter;
-import org.tensorflow.lite.support.common.ops.NormalizeOp;
-import org.tensorflow.lite.support.image.ImageProcessor;
-import org.tensorflow.lite.support.image.TensorImage;
-import org.tensorflow.lite.support.tensorbuffer.TensorBuffer;
+import java.io.FileInputStream;
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 public class MainActivity extends AppCompatActivity {
 
+    private static final int REQUEST_CODE_PERMISSIONS = 10;
     private static final String[] REQUIRED_PERMISSIONS = new String[]{Manifest.permission.CAMERA};
     private static final int IMAGE_SIZE = 224;
     private static final int NUM_CLASSES = 8; // Number of classes for your model
@@ -63,16 +63,15 @@ public class MainActivity extends AppCompatActivity {
         }
 
         // Request camera permissions
-        ActivityResultLauncher<String[]> requestPermissionLauncher = registerForActivityResult(
-                new ActivityResultContracts.RequestMultiplePermissions(),
-                permissions -> {
-                    Boolean cameraGranted = permissions.get(Manifest.permission.CAMERA);
-                    if (cameraGranted != null && cameraGranted) {
-                        startCamera();
-                    } else {
-                        resultTextView.setText(R.string.camera_permission_is_required);
-                    }
-                });
+        ActivityResultLauncher<String[]> requestPermissionLauncher = registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), permissions -> {
+            Boolean cameraGranted = permissions.get(Manifest.permission.CAMERA);
+            if (cameraGranted != null && cameraGranted) {
+                startCamera();
+            } else {
+                // Permission request was denied.
+                resultTextView.setText(R.string.camera_permission_is_required);
+            }
+        });
 
         if (allPermissionsGranted()) {
             startCamera();
@@ -87,19 +86,26 @@ public class MainActivity extends AppCompatActivity {
 
     private void startCamera() {
         ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
+
         cameraProviderFuture.addListener(() -> {
             try {
                 ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
+
                 Preview preview = new Preview.Builder().build();
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
                 ImageAnalysis imageAnalyzer = new ImageAnalysis.Builder()
+                        .setResolutionSelector(new ResolutionSelector.Builder()
+                                .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                                .setAspectRatioStrategy(RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                                .build())
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build();
 
                 imageAnalyzer.setAnalyzer(cameraExecutor, new YourImageAnalyzer(result -> runOnUiThread(() -> resultTextView.setText(result))));
 
                 CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
+
                 cameraProvider.unbindAll();
                 cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalyzer);
             } catch (ExecutionException | InterruptedException e) {
@@ -109,11 +115,15 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private MappedByteBuffer loadModelFile() throws IOException {
-        AssetManager assetManager = getAssets();
-        return assetManager.openFd("shape_classification_model.tflite").createInputStream().getChannel().map(FileChannel.MapMode.READ_ONLY, 0, assetManager.openFd("shape_classification_model.tflite").getDeclaredLength());
+        try (FileInputStream fileInputStream = new FileInputStream(getAssets().openFd("shape_classification_model.tflite").getFileDescriptor())) {
+            FileChannel fileChannel = fileInputStream.getChannel();
+            long startOffset = getAssets().openFd("shape_classification_model.tflite").getStartOffset();
+            long declaredLength = getAssets().openFd("shape_classification_model.tflite").getDeclaredLength();
+            return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength);
+        }
     }
 
-    private class YourImageAnalyzer implements ImageAnalysis.Analyzer {
+    public class YourImageAnalyzer implements ImageAnalysis.Analyzer {
         private final OnResultListener onResultListener;
 
         YourImageAnalyzer(OnResultListener onResultListener) {
@@ -123,55 +133,61 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void analyze(@NonNull ImageProxy imageProxy) {
             Bitmap bitmap = imageProxyToBitmap(imageProxy);
-            String result = runInference(bitmap);
-            onResultListener.onResult(result);
+            if (bitmap != null) {
+                String result = runInference(bitmap);
+                onResultListener.onResult(result);
+            }
             imageProxy.close();
         }
 
         private Bitmap imageProxyToBitmap(ImageProxy imageProxy) {
             ImageProxy.PlaneProxy[] planes = imageProxy.getPlanes();
             ByteBuffer yBuffer = planes[0].getBuffer(); // Y
-            ByteBuffer uBuffer = planes[1].getBuffer(); // U
-            ByteBuffer vBuffer = planes[2].getBuffer(); // V
 
-            int ySize = yBuffer.remaining();
-            int uSize = uBuffer.remaining();
-            int vSize = vBuffer.remaining();
-            byte[] nv21 = new byte[ySize + uSize + vSize];
+            // Convert the YUV image to grayscale
+            byte[] nv21 = new byte[yBuffer.remaining()];
+            yBuffer.get(nv21);
 
-            yBuffer.get(nv21, 0, ySize);
-            vBuffer.get(nv21, ySize, vSize);
-            uBuffer.get(nv21, ySize + vSize, uSize);
+            // Create a grayscale bitmap
+            Bitmap grayscaleBitmap = Bitmap.createBitmap(imageProxy.getWidth(), imageProxy.getHeight(), Bitmap.Config.ARGB_8888);
 
-            Bitmap bitmap = Bitmap.createBitmap(imageProxy.getWidth(), imageProxy.getHeight(), Bitmap.Config.ARGB_8888);
-            bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(nv21));
-            return Bitmap.createScaledBitmap(bitmap, IMAGE_SIZE, IMAGE_SIZE, false);
+            int[] pixels = new int[imageProxy.getWidth() * imageProxy.getHeight()];
+            for (int i = 0; i < nv21.length; i++) {
+                int luminance = nv21[i] & 0xFF;
+                pixels[i] = Color.rgb(luminance, luminance, luminance);
+            }
+
+            grayscaleBitmap.setPixels(pixels, 0, imageProxy.getWidth(), 0, 0, imageProxy.getWidth(), imageProxy.getHeight());
+
+            // Resize and center-crop the image to maintain aspect ratio
+            return Bitmap.createScaledBitmap(grayscaleBitmap, IMAGE_SIZE, IMAGE_SIZE, true);
         }
 
         private String runInference(Bitmap bitmap) {
-            // Convert bitmap to TensorImage and apply normalization
-            TensorImage tensorImage = new TensorImage();
-            tensorImage.load(bitmap);
-
-            // Create ImageProcessor with NormalizeOp
-            ImageProcessor imageProcessor = new ImageProcessor.Builder()
-                    .add(new NormalizeOp(0, 255)) // Normalization parameters
-                    .build();
-
-            TensorImage processedImage = imageProcessor.process(tensorImage);
-
-            // Prepare input data
+            // Convert the bitmap to a ByteBuffer
             ByteBuffer inputBuffer = ByteBuffer.allocateDirect(IMAGE_SIZE * IMAGE_SIZE * 4);
             inputBuffer.order(ByteOrder.nativeOrder());
-            processedImage.getBuffer();
+            int[] intValues = new int[IMAGE_SIZE * IMAGE_SIZE];
+            bitmap.getPixels(intValues, 0, bitmap.getWidth(), 0, 0, bitmap.getWidth(), bitmap.getHeight());
+
+            // Normalize the pixel values to [-1, 1] range
+            for (int pixelValue : intValues) {
+                float normalizedValue = ((pixelValue & 0xFF) / 127.5f) - 1;
+                inputBuffer.putFloat(normalizedValue);
+            }
 
             // Prepare output data
             float[][] output = new float[1][NUM_CLASSES];
+
+            // Run model inference
             interpreter.run(inputBuffer, output);
+
+            // Get classification result
             return getTopLabel(output[0]);
         }
 
         private String getTopLabel(float[] outputScores) {
+            // Find the highest score and return corresponding label
             int maxIndex = -1;
             float maxScore = -1;
             for (int i = 0; i < outputScores.length; i++) {
