@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">TinyML</string>
+    <string name="no_result_yet">No result yet</string>
+</resources>
