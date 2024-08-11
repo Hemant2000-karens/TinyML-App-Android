@@ -1,0 +1,2 @@
+ninja: Entering directory `/Users/hemant/AndroidStudioProjects/TinyML/openCV/.cxx/Debug/5o5e105j/arm64-v8a'
+ninja: no work to do.

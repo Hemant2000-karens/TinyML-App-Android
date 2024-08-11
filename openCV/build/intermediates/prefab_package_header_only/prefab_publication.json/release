@@ -1,0 +1,17 @@
+{
+  "installationFolder": "/Users/hemant/AndroidStudioProjects/TinyML/openCV/build/intermediates/prefab_package/release/prefab",
+  "gradlePath": ":openCV",
+  "packageInfo": {
+    "packageName": "openCV",
+    "packageSchemaVersion": 2,
+    "packageDependencies": [],
+    "modules": [
+      {
+        "moduleName": "opencv_jni_shared",
+        "moduleHeaders": "/Users/hemant/AndroidStudioProjects/TinyML/openCV/native/jni/include",
+        "moduleExportLibraries": [],
+        "abis": []
+      }
+    ]
+  }
+}
