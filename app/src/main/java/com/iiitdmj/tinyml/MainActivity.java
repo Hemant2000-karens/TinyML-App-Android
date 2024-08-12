@@ -1,6 +1,8 @@
 package com.iiitdmj.tinyml;
 
+import static androidx.camera.core.resolutionselector.AspectRatioStrategy.FALLBACK_RULE_AUTO;
 import static androidx.camera.core.resolutionselector.AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY;
+import static androidx.camera.core.resolutionselector.ResolutionStrategy.FALLBACK_RULE_NONE;
 
 import android.os.Bundle;
 import android.Manifest;
